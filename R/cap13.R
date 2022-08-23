@@ -1,0 +1,548 @@
+#-----------------------------------------------------------
+#-----------------------------------------------------------
+# Gestión Moderna de portafolio
+# Capitulo 13: Optimización Robusta
+# Copyright 2022
+#-----------------------------------------------------------
+#-----------------------------------------------------------
+
+rm(list=ls())
+library(zoo)
+library(xts)
+library(quantmod)
+library(quadprog)
+
+## Acciones seleccionadas
+activos <- c("ADBE","MCD","MSCI","MSFT","NEE","PG","RSG","WMT")
+fechai <- '2015-12-01'
+fechaf <- '2020-12-31'
+periodicidad <- "monthly"   
+precios.hist <- precios(activos,fechai,fechaf,periodicidad)
+retornos <- diff(log(precios.hist))[-1,]
+
+mu <- colMeans(retornos)
+cov <- cov(retornos)
+var <- diag(cov)
+sigma <- sqrt(var)
+corr <- cor(retornos)
+rf <- 0 
+n <- length(mu)
+
+# Indice
+indice <- c("^GSPC")
+p.indice <- precios(indice,fechai,fechaf,periodicidad)
+r.indice <- diff(log(p.indice))[-1,]
+mu.indice <- mean(r.indice)
+sigma.indice <- sd(r.indice)
+
+##-----------------------------------------------------------
+##-----------------------------------------------------------
+
+# Ejemplo 13.1
+# Solución modelo MV
+# Formas convexas para PMVG y PT
+library(matlab)
+library(MASS)
+library(CVXR)
+
+portfolioMarkowitz <- function(mu, cov){
+    w <- Variable(n)
+    prob <- Problem(Minimize( quad_form(w, cov) ),
+                    constraints = list(w >= 0,  ones(1,n)%*%w==1 )) 
+    result <- solve(prob)
+    return(as.vector(result$getValue(w)))
+}
+w_Markowitz <- round(portfolioMarkowitz(mu, cov),4)
+names(w_Markowitz) <- colnames(cov)
+w_Markowitz <- cbind(w_Markowitz)
+
+# MV - Sharpe
+portfolioMaxSharpeRatio <- function(mu, cov) {
+    w <- Variable(n)
+    prob <- Problem(Minimize(quad_form(w, cov)),
+                    constraints = list(w >= 0, t(mu) %*% w == 1))
+    result <- solve(prob)
+    w <- as.vector(result$getValue(w)/sum(result$getValue(w)))
+    names(w) <- colnames(cov)
+    return(w)
+}
+w_MaxSR <- round(portfolioMaxSharpeRatio(mu, cov),4)
+names(w_MaxSR) <- colnames(cov)
+w_MaxSR  <- cbind(w_MaxSR)
+
+# Resultados 
+windows()
+barplot(t(w_Markowitz), main="PMVG",beside = TRUE,ylab="Part (%)",
+        ylim=c(0,0.3))
+windows()
+barplot(t(w_MaxSR), main="PMVG",beside = TRUE,ylab="Part (%)",
+        ylim=c(0,0.4))
+
+# Pesos optimos
+wMV <- cbind(w_Markowitz,w_MaxSR)
+
+windows()
+barplot(t(wMV),beside=TRUE,ylab="Part (%)",ylim=c(0,0.4))
+legend("topright",legend = c("PMVG","PT"), fill=c("black","gray"))
+
+## ----------------------------------------------------------------
+## ----------------------------------------------------------------
+
+## Portafolios Robustos
+
+# Incertidumbre de Intervalo
+
+# Calculo delta (distribución normal)
+t <- nrow(retornos[,1])
+alpha <- 0.05
+znorm <- qnorm((1-alpha/2), 0, 1)
+(delta <- znorm*sigma/sqrt(t))
+
+# Calculo lambda: COef. Sharpe
+rpSharpe <- mu%*%w_MaxSR
+sigmapSharpe <- sqrt(t(w_MaxSR)%*%cov%*%w_MaxSR)
+(lambda <- (rpSharpe-rf)/sigmapSharpe^2)
+
+portfolioRobustBoxU <- function(mu, cov, delta){
+    w <- Variable(length(mu))
+    prob <- Problem(Maximize( t(w)%*%mu-t(abs(w))%*%delta-lambda*(quad_form(w, cov)) ),
+                    constraints = list(w >= 0, ones(1,n)%*%w==1)) #sum(w) == 1
+    result <- solve(prob)
+    return(as.vector(result$getValue(w)))
+}
+
+w_RobustBox <- round(portfolioRobustBoxU(mu, cov, delta),4)
+names(w_RobustBox) <- colnames(cov)
+(w_RobustBox  <- cbind(w_RobustBox))
+
+windows()
+barplot(t(w_RobustBox), main="PRMVi",beside = TRUE,ylab="Part (%)",
+        ylim=c(0,0.3))
+
+wcomp <- cbind(w_RobustBox,w_MaxSR)
+
+windows()
+barplot(t(wcomp),beside=TRUE,ylab="Part (%)",ylim=c(0,0.4))
+legend("topright",legend = c("PRMVi","PT"), fill=c("black","gray"))
+
+
+## ----------------------------------------------------------------
+
+# Ejemplo 13.2
+# Incertidumbre Elipsoidal 
+
+(delta2 = sqrt(qchisq(alpha,n)))
+
+portfolioRobustEllipsoidU <- function(mu, cov, delta) {
+    S12 <- chol(cov)  # t(S12) %*% S12 = Sigma
+    w <- Variable(length(mu))
+    prob <- Problem(Maximize( t(w)%*%mu-lambda*(quad_form(w, cov))-delta2*(norm2(S12%*%w))),
+                    constraints = list(w >= 0, ones(1,n)%*%w==1))
+    result <- solve(prob)
+    return(as.vector(result$getValue(w)))
+}
+
+w_RobustEllipsoid <- round(portfolioRobustEllipsoidU(mu, cov, delta2),4)
+names(w_RobustEllipsoid) <- colnames(cov)
+(w_RobustEllipsoid  <- cbind(w_RobustEllipsoid))
+
+# COmparación de resultados
+windows()
+barplot(t(w_RobustEllipsoid), main="PRMVe",beside = TRUE,ylab="Part (%)",
+        ylim=c(0,0.3))
+
+wcomp2 <- cbind(w_RobustEllipsoid,w_MaxSR)
+
+windows()
+barplot(t(wcomp2),beside=TRUE,ylab="Part (%)",ylim=c(0,0.4))
+legend("topright",legend = c("PRMVe","PT"), fill=c("black","gray"))
+
+## ----------------------------------------------------------------
+## ----------------------------------------------------------------
+
+# Evaluacion de desempeno 
+
+# Dentro de muestra
+
+# Retornos
+(rp.PT <- t(w_MaxSR)%*%mu)
+(rp.PRMVi <- t(w_RobustBox)%*%mu)
+(rp.PRMVe <- t(w_RobustEllipsoid)%*%mu)
+(mu.indice)
+
+# Riesgo
+(sigma.PT <- sqrt(t(w_MaxSR)%*%cov%*%w_MaxSR))
+(sigma.PRMVi <- sqrt(t(w_RobustBox)%*%cov%*%w_RobustBox))
+(sigma.PRMVe <- sqrt(t(w_RobustEllipsoid)%*%cov%*%w_RobustEllipsoid))
+(sigma.indice)
+
+# Coef. Sharpe
+(S.PT <- (rp.PT-rf)/sigma.PT)
+(S.PRMVi <- (rp.PRMVi-rf)/sigma.PRMVi)
+(S.PRMVe <- (rp.PRMVe-rf)/sigma.PRMVe)
+(S.Indice <- (mu.indice-rf)/sigma.indice)
+
+# Desempeño historico - Valor del portafolio
+valor <- 100 
+t <- nrow(retornos)
+n <- ncol(retornos)
+
+# Retornos historicos
+
+# Portafolio PT
+rppt <- retornos%*%w_MaxSR
+# PRMVi
+rprmvi <- retornos%*%w_RobustBox
+# PRMVe
+rprmve <- retornos%*%w_RobustEllipsoid
+
+# Valor del portafolio PT
+port.pt <- matrix(0, nrow=t)
+port.pt[1] <- valor
+for(i in 2:t){
+    port.pt[i] <- port.pt[i-1]*exp(rppt[i-1])
+}
+
+# Valor del PRMVi
+port.rmvi <- matrix(0, nrow=t)
+port.rmvi[1] <- valor
+for(i in 2:t){
+    port.rmvi[i] <- port.rmvi[i-1]*exp(rprmvi[i-1])
+}
+
+# Valor del PRMVe
+port.rmve <- matrix(0, nrow=t)
+port.rmve[1] <- valor
+for(i in 2:t){
+    port.rmve[i] <- port.rmve[i-1]*exp(rprmve[i-1])
+}
+
+# Valor del benchmark
+v.benchmark <- matrix(0, nrow=t)
+v.benchmark[1] <- valor
+for(i in 2:t){
+    v.benchmark[i] <- v.benchmark[i-1]*exp(r.indice[i-1])
+}
+
+Performance <- cbind(port.rmvi,port.rmve,port.pt,v.benchmark)
+Performance <- ts(Performance,start=2016, frequency=12)
+colnames(Performance) <- c("PRMVi","PRMVe","PT","Benchmark")
+                     
+windows()
+plot(Performance[,1], type='l',main="Evaluación de desempeño",ylim=c(100,400), 
+     ylab="Valor del portafolio", xlab="Tiempo (años)",bty="L")
+lines(Performance[,2], col='darkblue')
+lines(Performance[,3],lty=2)
+lines(Performance[,4], col='darkgray')
+legend("topleft",c("PRMVi","PRMVe","PT","S&P 500"),
+       lty =c(1,1,2,1), col=c("black","darkblue","black","darkgray"))
+
+## ----------------------------------------------------------------
+
+# Desempeño Out-sample
+
+fechaifm <- '2020-12-01'
+fechaffm <- '2021-12-31'
+
+preciosfm <- precios(activos,fechaifm,fechaffm,periodicidad)
+retornosfm <- diff(log(preciosfm))[-1,]
+indicefm <- precios(indice,fechaifm,fechaffm,periodicidad)
+r.indicefm <- diff(log(indicefm))[-1,]
+
+valor <- 100 
+t <- nrow(retornosfm)+1
+n <- ncol(retornosfm)
+
+## Retornos historicos
+rpptfm <- retornosfm%*%w_MaxSR
+rprmvifm <- retornosfm%*%w_RobustBox
+rprmvefm <- retornosfm%*%w_RobustEllipsoid
+
+## Retornos esperados
+(mu.PTfm <- mean(rpptfm))
+(mu.PRMVifm <- mean(rprmvifm))
+(mu.PRMVefm <- mean(rprmvefm))
+(mu.indicefm <- mean(r.indicefm))
+
+# Riesgo
+(sigma.PTfm <- sd(rpptfm))
+(sigma.PRMVifm <- sd(rprmvifm))
+(sigma.PRMVefm <- sd(rprmvefm))
+(sigma.indicefm <- sd(r.indicefm))
+
+# Coef. Sharpe
+(S.PTfm <- (mu.PTfm-rf)/sigma.PTfm)
+(S.PRMVifm <- (mu.PRMVifm-rf)/sigma.PRMVifm)
+(S.PRMVefm <- (mu.PRMVefm-rf)/sigma.PRMVefm)
+(S.Indicefm <- (mu.indicefm-rf)/sigma.indicefm)
+
+# Valor del portafolio PT
+port.ptfm <- matrix(0, nrow=t)
+port.ptfm[1] <- valor
+for(i in 2:t){
+    port.ptfm[i] <- port.ptfm[i-1]*exp(rpptfm[i-1])
+}
+
+# Valor del PRMVi
+port.rmvifm <- matrix(0, nrow=t)
+port.rmvifm[1] <- valor
+for(i in 2:t){
+    port.rmvifm[i] <- port.rmvifm[i-1]*exp(rprmvifm[i-1])
+}
+
+# Valor del PRMVe
+port.rmvefm <- matrix(0, nrow=t)
+port.rmvefm[1] <- valor
+for(i in 2:t){
+    port.rmvefm[i] <- port.rmvefm[i-1]*exp(rprmvefm[i-1])
+}
+
+# Benchmark
+v.benchmarkfm <- matrix(0, nrow=t)
+v.benchmarkfm[1] <- valor
+for(i in 2:t){
+    v.benchmarkfm[i] <- v.benchmarkfm[i-1]*exp(r.indicefm[i-1])
+}
+
+Performancefm <- cbind(port.rmvifm,port.rmvefm,port.ptfm,v.benchmarkfm)
+Performancefm <- ts(Performancefm,start=c(2021,1), frequency=12)
+colnames(Performancefm) <- c("PRMVi","PRMVe","PT","Benchmark")
+
+windows()
+plot(Performancefm[,1], type='l',main="Evaluación de desempeño", 
+     ylab="Valor del portafolio", xlab="Tiempo (meses)",bty="L") #,ylim=c(100,400)
+lines(Performancefm[,2], col='darkblue')
+lines(Performancefm[,3],lty=2)
+lines(Performancefm[,4], col='darkgray')
+legend("topleft",c("PRMVi","PRMVe","PT","S&P 500"),
+       lty =c(1,1,2,1), col=c("black","darkblue","black","darkgray"))
+
+
+#----------------------------------------------------------------------
+#----------------------------------------------------------------------
+
+# Comparación de resultados
+# Ventana movil
+
+Sharpe_ratio <- function(w, mu, cov) {
+    return(t(w) %*% mu / sqrt(t(w) %*% cov %*% w))
+    }
+
+Sharpe_Markowitz <- NULL
+Sharpe_RobustEllip <- NULL
+
+nport <- 100
+w_all_Markowitz <- matrix(0,ncol=n,nrow=nport)
+w_all_Markowitz_RobEllip <- matrix(0,ncol=n,nrow=nport)
+
+set.seed(123)
+for (i in 1:nport) {
+    ret_rand <- mvrnorm(t, mu, cov)
+    mu_rand <- colMeans(ret_rand)
+    cov_rand <- cov(ret_rand)
+    
+    w_Markowitz <- cbind(portfolioMarkowitz(mu_rand,cov_rand))
+    w_RMVe <- cbind(portfolioRobustEllipsoidU(mu_rand, cov_rand, delta2))
+    
+    w_all_Markowitz[i,] <- rbind(w_Markowitz)
+    w_all_Markowitz_RobEllip[i,] <- rbind(w_RMVe)
+    
+    Sharpe_Markowitz[i] <- apply(w_Markowitz,MARGIN=2, FUN=Sharpe_ratio,mu_rand,cov_rand)
+    Sharpe_RobustEllip[i] <- apply(w_RMVe,MARGIN=2,FUN=Sharpe_ratio,mu_rand,cov_rand)
+}
+
+(meanMV <- mean(Sharpe_Markowitz))
+(meanRMVe <- mean(Sharpe_RobustEllip))
+(SR_fix <- Sharpe_ratio(w_Markowitz, mu, cov))
+
+windows()
+plot(Sharpe_rand, col="darkgreen",pch=19)
+points(Sharpe_RobustEllip, col="black",pch=19)
+abline(h = SR_fix)
+legend("topleft",c("MV","RobustEllip"), 
+       col=c("darkgreen","black"),pch=c(19,19)) 
+text((nport-2),SR_fix,labels = paste("Sharpe = ",round(SR_fix,4)),pos = 3)
+
+
+#----------------------------------------------------------------------
+#----------------------------------------------------------------------
+
+## Optimización Robusta Bayesiana: Meucci
+
+library( matlab )
+library( quadprog )
+library( ggplot2 )
+library( MASS )
+
+efficientFrontier = function( discretizations , cov , mu , longonly = FALSE ) {    
+    # setup quadratic program
+    N = nrow( cov )
+    firstDegree = zeros( N , 1 )
+    secondDegree = cov
+    Aeq = ones( 1 , N ) ; beq = 1
+    A = eye( N )
+    b = zeros( N , 1 )
+    
+    if ( !longonly ){ Aqp = t( Aeq ) ; bqp = beq } 
+    else{ Aqp = t( rbind( Aeq , A ) ) ; bqp = c( beq , b ) }
+    
+    # determine return of minimum-risk portfolio
+    minVolWeights = solve.QP( secondDegree , firstDegree , Aqp , bqp , length( beq ) )$solution
+    minVolRet = minVolWeights %*% mu
+    
+    # determine return of maximum-return portfolio
+    maxRet = max( mu )
+    
+    # slice efficient frontier in 'discretizations' number of equally thick horizontal sectors in the upper branch only
+    step = ( maxRet - minVolRet ) / ( discretizations - 1 )
+    targetReturns = seq( minVolRet , maxRet , step )
+    
+    # compute the compositions and risk-return coordinates of the optimal allocations relative to each slice
+    
+    # start with min vol portfolio
+    weights = minVolWeights
+    volatility = sqrt( minVolWeights %*% cov %*% minVolWeights )
+    returns = minVolRet
+    
+    for( i in 2:( discretizations - 1 ) ){
+        #  determine least risky portfolio for given expected return
+        Aeq = ones( 1 , N )
+        Aeq = rbind( Aeq , t( mu ) )
+        
+        beq = c( 1 , targetReturns[i] )
+        if( !longonly ){
+            Aqp = t( Aeq ) #combine A matrices
+            bqp = beq #combine b vectors
+        }else{
+            Aqp = t( rbind( Aeq , A ))
+            bqp = c(beq,b)
+        }
+        
+        solvedWeights = solve.QP( secondDegree , firstDegree , Aqp , bqp , 1 )$solution
+        weights = rbind( weights , solvedWeights )
+        volatility = c( volatility , sqrt( solvedWeights %*% cov %*% solvedWeights ) )
+        returns = c( returns , solvedWeights %*% mu )
+        
+    }  
+    return( list( returns = returns , volatility = volatility , weights = weights ) )
+}
+
+
+#' Construct a Bayesian mean-variance efficient frontier and identifies the most robust portfolio
+
+robustBayesianPortfolioOptimization = function( mean_post , cov_post , nu_post , time_post, riskAversionMu = .1 , riskAversionSigma = .1 , discretizations = 10 , longonly = FALSE , volatility ){    
+    # parameter checks    
+    N = length( mean ) # number of assets    
+    if ( ( N < 2 ) == TRUE ) { stop( "Requires a minimum of two assets to perform optimization" ) }
+    if ( discretizations < 1 ) { stop( "Number of discretizations must be an integer greater than 1" ) }  
+    if ( volatility < 0 ) { stop( "Volatility cannot be a negative number" ) }
+    if ( nu_post < 3 ) { stop( "nu_post must be greater than 2 otherwise g_m is undefined " ) }
+    if ( riskAversionMu < 0 ) { stop( "riskAversionMu must be a positive number" ) }
+    if ( riskAversionSigma < 0 ) { stop( "riskAversionSigma must be a positive number" ) }
+    
+    # construct Bayesian efficient frontier
+    bayesianFrontier = efficientFrontier( discretizations , cov_post , mean_post , longonly = TRUE ) # returns a list of returns, volatility, and assets weights along the posterior frontier. Each row represents a point on the frontier
+    
+    # measure gamma-m and gamma-s to identify which portfolios along the frontier are robust
+    quantileMeanSquared = qchisq( riskAversionMu , N ) # the value of q-u is typically set to the quantile of the chi-squared distribution with N degrees of freedom (formula 6)    
+    
+    # g_m is defined as a constraint on the optimal robust portfolio such that the variance of the robust portfolio must be less than gamma-m
+    g_m = sqrt( quantileMeanSquared / time_post * nu_post / ( nu_post - 2 ) ) # gamma-m (formula 20)
+    
+    quantileCovSquared = qchisq( riskAversionSigma , N * ( N + 1 ) / 2 ) # from formula 7. N*(N+1)/2 is the degrees of freedom in a symmetric matrix (number of unique elements)        
+    g_s = volatility / ( nu_post / ( nu_post + N + 1 ) + sqrt( 2 * nu_post * nu_post * quantileCovSquared / ( ( nu_post + N + 1 ) ^ 3 ) ) ) # gamma-sigma (formula 21) corresponding to the i'th portfolio along the sample efficient frontier
+    
+    # initialize parameters
+    target = NULL
+    
+    # for each of the portfolios along the efficient Bayesian frontier identify the most robust portfolio
+    for( k in 1:( discretizations - 1 ) ) {                
+        weightsBay = bayesianFrontier[[ "weights" ]][ k , ]                
+        
+        # reject portfolios that do not satisfy the constraints of formula 19 (i.e. Bayesian portfolios that are not robust, for example, the portfolios at the limit -- 100% confidence in prior or 100% confidence in sample)        
+        # identify Robust Bayesian frontier which is a subset of the Bayesian frontier that is further shrunk to toward the global minimumm variance portfolio
+        # and even more closely tight to the right of the efficient frontier        
+        if ( weightsBay %*% cov_post %*% weightsBay <= g_s ) # constraint for formula 19
+        { target = c( target , weightsBay %*% mean_post - g_m * sqrt( weightsBay %*% cov_post %*% weightsBay )) } # formula 19
+        else { target = c( target , -999999999 ) } # if the Bayesian efficient portfolio does not satisfy the constraint we assign a large negative value (we will reject these portfolios in the next step)
+    }    
+    
+    maxTarget = max( target )    
+    if ( maxTarget == -999999999 ) { stop( "No robust portfolio found within credibility set. Try increasing volatility or adjusting risk aversion parameters." ) }
+    maxIndex = which( target == maxTarget , arr.ind = TRUE ) # identify most robust Bayesian portfolio
+    if ( length( maxIndex ) > 1 ) { stop( "The number of robust portfolios identified is greater than 1. Debug. " )}
+    
+    # identify Robust portfolio as a subset of Bayesian frontier    
+    robustPortfolio = list( returns    = bayesianFrontier[[ "returns" ]][ maxIndex ] ,
+                            volatility = bayesianFrontier[[ "volatility" ]][ maxIndex ] ,
+                            weights    = bayesianFrontier[[ "weights" ]][ maxIndex , ] )    
+    
+    return( list( bayesianFrontier = bayesianFrontier , robustPortfolio = robustPortfolio , g_m = g_m , g_s = g_s ) )
+    
+    # Test that the number of returns portfolios is <= number of discretizations
+    # Test that there are no NA's in the return results
+}
+
+PartialConfidencePosterior = function( mean_sample , cov_sample , mean_prior , cov_prior , relativeConfidenceInMeanPrior , relativeConfidenceInCovPrior , sampleSize ){
+    # parameter checks
+    if ( (length( mean_sample ) == nrow( cov_sample )) == FALSE ) { stop( "number of assets in mean must match number of assets in covariance matrix")}
+    if ( (length( mean_sample ) == length( mean_prior )) == FALSE ) { stop( "number of assets in mean must match number of assets in mean_prior")}
+    if ( ( nrow( cov_sample ) == nrow( cov_prior ) ) == FALSE ) { stop( "number of assets in sample covariance must match number of assets in prior covariance matrix")}
+    N = length( mean_sample ) # number of assets    
+    if ( ( N < 2 ) == TRUE ) { stop( "requires a minimum of two assets to perform optimization" ) }
+    if ( relativeConfidenceInMeanPrior < 0 ) { stop( "Confidence in mean prior must be a number greater than or equal to zero" ) }
+    if ( relativeConfidenceInCovPrior  < 0 ) { stop( "Confidence in covariance prior must be a number greater than or equal to zero" ) }
+    
+    # Investor's experience and confidence is summarized by mean_prior, cov_prior, time_prior, and nu_prior
+    # nu_prior = confidence on the inverse of cov_prior (see 7.25 - Meucci Risk & Asset Allocation Text). A larger value of nu_prior corresponds to little uncertainty about the view on inverse of Sigma, and thus Sigma    
+    # confidenceInPrior = time_prior = T0 = confidence in the prior view mean_prior
+    confidenceInSample = sampleSize # typically the number of observations on which the mean_sample and cov_sample is based on
+    confidenceInMeanPrior = sampleSize * relativeConfidenceInMeanPrior
+    confidenceInCovPrior = sampleSize * relativeConfidenceInCovPrior
+    
+    # blend prior and the sample data to construct posterior
+    time_post = confidenceInSample + confidenceInMeanPrior
+    nu_post = confidenceInSample + confidenceInCovPrior    
+    mean_post = 1/time_post * ( mean_sample * confidenceInSample + mean_prior * confidenceInMeanPrior )    
+    cov_post = 1/nu_post * (cov_sample * confidenceInSample + cov_prior * confidenceInCovPrior + ( mean_sample - mean_prior ) %*% t( ( mean_sample - mean_prior ) ) / ( 1 / confidenceInSample + 1 / confidenceInMeanPrior ) )
+    
+    return( list( mean_post = mean_post , cov_post = cov_post , time_post = time_post , nu_post = nu_post ) )    
+    
+    # TODO: Test expectations
+    # Test 1: If relative confidence in prior is 0, then returns mean_sample and cov_sample
+    # Test 2: If relative confidence in prior is 1, and sampleSize = 0 then returns mean_prior and cov_prior
+    # Test 3: As the number of sample size observations increase, the posterior mean and covariance shrinks toward mean_sample and cov_sample
+}
+
+T0 = t
+confidenceInPrior = time_prior = T0 
+relativeConfidenceInMeanPrior = 2
+relativeConfidenceInCovPrior = 2
+sampleSize  = T0
+mean_sample = mu
+cov_sample = cov
+mean_prior = rep(0.015,n)
+cov_prior = cov
+nu_post = 2 
+riskAversionMu = .1 
+riskAversionSigma = .1 
+discretizations = 10 
+longonly = TRUE 
+volatility = .10
+
+PartialConfidencePosterior(mean_sample , cov_sample , mean_prior , cov_prior , relativeConfidenceInMeanPrior , relativeConfidenceInCovPrior , sampleSize )
+    
+# Example:
+robustBayesianPortfolioOptimization( mean_post = mean_post , cov_post = cov_post , nu_post = 2 , riskAversionMu = .1 , riskAversionSigma = .1 , discretizations = 10 , longonly = TRUE , volatility = .10 )
+    
+    
+
+
+
+
+
+
+
+
+
+
