@@ -114,7 +114,6 @@ precios = yf.download(activos,start=fechai,end=fechaf,interval=periodicidad)['Ad
 retornos = np.log(precios/precios.shift(1)).dropna()
 
 # Load data INDIPRO y UNEMP
-#data = pd.read_csv("factores.csv").values
 factores = pd.read_csv("factores.csv")[['indipro','unemp']]
 factores.index = retornos_sp.index
 factores2 = factores.join(retornos_sp)
@@ -134,3 +133,25 @@ modeloGOOG.params
 # Regresión factorial para MSFT
 modeloMSFT = sm.OLS(retornos['MSFT'], sm.add_constant(factores2)).fit()
 modeloMSFT.params
+
+"""### Ejemplo 8.3: Modelos Factoriales - Fama y French"""
+
+# Información histórica para la acción de WMT
+fechai = "2015-12-01"
+fechaf = "2020-12-31"
+periodicidad = "1Mo"
+activos = ["AAPL","AMZN","GOOGL","MSFT"]
+precios = yf.download(activos,start=fechai,end=fechaf,interval=periodicidad)['Adj Close'].dropna()
+retornos = np.log(precios/precios.shift(1)).dropna()
+
+# Factores del modelo de estimacion
+# Importar la info descargada desde la web-page de Keneth French
+datosff3 = pd.read_csv("datosff3.csv")[['Mkt-RF','SMB','HML']]
+datosff3.index = retornos.index
+
+# Regresión unifactorial para AAPL
+modeloAAPL = sm.OLS(retornos['AAPL'], sm.add_constant(datosff3['Mkt-RF'])).fit()
+modeloAAPL.params
+
+modeloAAPLf = sm.OLS(retornos['AAPL'], sm.add_constant(datosff3)).fit()
+modeloAAPLf.params
