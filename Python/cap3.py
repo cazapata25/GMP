@@ -218,7 +218,7 @@ plt.show()
 fechai = "2015-12-01"
 fechaf = "2020-12-31"
 periodicidad = "1Mo"
-activos = ["AAPL","ABT","AMZN","CAT","CSX","FB","GOOG","HD","JNJ","MSFT","MCD","V"]
+activos = ["AAPL","ABT","AMZN","CAT","CSX","META","GOOG","HD","JNJ","MSFT","MCD","V"]
 precios = yf.download(activos,start=fechai,end=fechaf,interval=periodicidad)['Adj Close'].dropna()
 retornos = np.log(precios/precios.shift(1)).dropna()
 indice = yf.download("^GSPC",start=fechai,end=fechaf,interval=periodicidad)['Adj Close'].dropna()
@@ -232,7 +232,7 @@ mu = retornos.mean()*12
 cov = retornos.cov()*12
 var = np.diag(cov)
 sigma = (retornos.std())*np.sqrt(12)
-estimaciones = pd.concat([mu, sigma],1).T
+estimaciones = pd.concat([mu, sigma],axis=1).T
 estimaciones.index=["Retorno","Riesgo"]
 estimaciones
 
@@ -283,16 +283,11 @@ sumacu2 = ratio2.cumsum()
 tasac = (sigmam**2 * sumacu1)/(1+ sigmam**2 * sumacu2)
 cuttoff = tasac.max()
 
-
-
 Zi = (tabla_sort['Beta']/tabla_sort['VarError'])*(tabla_sort['Treynor']-cuttoff)
 Zi = Zi.mask(Zi<0, 0)
 wi = round(Zi/sum(Zi),4)
 wpot = round(wi,4)
 wpot
-#rpot = wpot @ mu
-#sigmapot = np.sqrt(wpot.T @ cov @ wpot)
-#rpot,  sigmapot
 
 # Pesos del Portafolio de Treynor
 fig = plt.figure(figsize = (6, 5))
