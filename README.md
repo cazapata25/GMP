@@ -5,4 +5,13 @@ Este repositorio de *GitHub* contiene los códigos del libro “Gestión moderna
 
 Los códigos de R y Python están disponibles en cada una de las carpetas. Además, las aplicaciones se encuentran distribuidas por capítulos y, dentro de estos se encuentran identificados cada uno de los ejemplos.
 
+© 2023 CESA - Colegio de Estudios Superiores de Administración
+© 2023 Bernardo León Camacho / Carlos Andrés Zapata Q
+
+Editorial CESA
+Casa Incolda
+Diagonal 34a No. 5a-23
+www.editorialcesa.com 
+www.cesa.edu.co 
+editorialcesa@cesa.edu.co
 
